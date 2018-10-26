@@ -104,6 +104,32 @@ class Conjunction(val lhs: Term, val rhs: Term) : Term() {
     }
 }
 
+class Abstraction(val variable: Variable, val type: Term, val body: Term) : Term() {
+    override fun toString(): String {
+        return "λ$variable: $type. $body"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if(other is Abstraction) {
+            return variable == other.variable && body == other.body
+        }
+        return false
+    }
+}
+
+class Application(val lhs: Term, val rhs: Term) : Term() {
+    override fun toString(): String {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if(other is Application) {
+            return lhs == other.lhs && rhs == other.rhs
+        }
+        return false
+    }
+}
+
 fun elimImpl(term: Term) : Term {
     return when(term) {
         is Truth -> term
@@ -114,6 +140,7 @@ fun elimImpl(term: Term) : Term {
         is Negation -> Negation(elimImpl(term.rhs))
         is Disjunction -> Disjunction(elimImpl(term.lhs), elimImpl(term.rhs))
         is Conjunction -> Conjunction(elimImpl(term.lhs), elimImpl(term.rhs))
+        else -> throw RuntimeException("Not supported")
     }
 }
 
@@ -134,6 +161,7 @@ fun deMorgan(term: Term) : Term {
         }
         is Disjunction -> Disjunction(deMorgan(term.lhs), deMorgan(term.rhs))
         is Conjunction -> Conjunction(deMorgan(term.lhs), deMorgan(term.rhs))
+        else -> throw RuntimeException("Not supported")
     }
 }
 
@@ -153,6 +181,7 @@ fun distribute(term: Term) : Term {
             }
         }
         is Conjunction -> Conjunction(distribute(term.lhs), distribute(term.rhs))
+        else -> throw RuntimeException("Not supported")
     }
 }
 
@@ -276,17 +305,28 @@ fun disjunctiveTreeToSet(term: Disjunction) : Set<Term> {
         is Disjunction -> disjunctiveTreeToSet(term.lhs)
         is Negation -> setOf(term.lhs)
         is Variable -> setOf(term.lhs)
+        is Truth -> setOf(term.lhs)
         else -> throw RuntimeException("")
     }.union(when(term.rhs) {
         is Disjunction -> disjunctiveTreeToSet(term.rhs)
         is Negation -> setOf(term.rhs)
         is Variable -> setOf(term.rhs)
+        is Truth -> setOf(term.rhs)
         else -> throw RuntimeException("")
     })
 }
 
-fun toCNF(term: Conjunction) : ConjunctiveNormalForm {
-    val conjunctiveSet = conjunctiveTreeToSet(term)
+fun toCNF(term: Term) : ConjunctiveNormalForm {
+    val conjunctiveSet : Set<Disjunction>
+    if(term is Conjunction) {
+        conjunctiveSet = conjunctiveTreeToSet(term)
+    } else {
+        conjunctiveSet = hashSetOf(when(term) {
+            is Disjunction -> term
+            else -> throw RuntimeException("Bandaid") // TODO: Fix this.
+        })
+    }
+
     val outerSet = HashSet<HashSet<AtomicTerm>>()
 
     for(t in conjunctiveSet) {
@@ -297,6 +337,7 @@ fun toCNF(term: Conjunction) : ConjunctiveNormalForm {
             innerSet.add(when(u) {
                 is Variable -> AtomicTerm(true, u)
                 is Negation -> AtomicTerm(false, u.rhs)
+                is Truth -> AtomicTerm(true, u)
                 else -> throw RuntimeException("Unexpected term.")
             })
         }
@@ -305,6 +346,27 @@ fun toCNF(term: Conjunction) : ConjunctiveNormalForm {
     }
 
     return ConjunctiveNormalForm(outerSet)
+}
+
+fun applyWhileChanging(t: Term, f: (Term) -> Term) : Term {
+    var term = t
+    var newTerm = term
+    do {
+        term = newTerm
+        newTerm = f(term)
+    } while(term != newTerm)
+    return term
+}
+
+fun evaluateFOL(t: Term) : Boolean? {
+    var term = t
+    term = applyWhileChanging(term, ::elimImpl)
+    term = applyWhileChanging(term, ::deMorgan)
+    term = applyWhileChanging(term, ::distribute)
+
+    val cnf = toCNF(term)
+    cnf.simplify()
+    return cnf.truthValue()
 }
 
 fun main(args: Array<String>) {
@@ -317,34 +379,21 @@ fun main(args: Array<String>) {
 
     // A => B => ((A => C) => (B => C) => C)
     var term : Term = Implication(a, Implication(a, Implication(Implication(a, c), Implication(Implication(b, c), c))))
-    var newTerm = term
 
     println("Eliminating implications.")
 
-    do {
-        term = newTerm
-        println(term)
-        newTerm = elimImpl(term)
-    } while(term != newTerm)
+    term = applyWhileChanging(term, ::elimImpl)
 
     println("Applying DeMorgan's Law.")
 
-    do {
-        term = newTerm
-        println(term)
-        newTerm = deMorgan(term)
-    } while(term != newTerm)
+    term = applyWhileChanging(term, ::deMorgan)
 
     println("Distributing ORs inwards over ANDs.")
 
-    do {
-        term = newTerm
-        println(term)
-        newTerm = distribute(term)
-    } while(term != newTerm)
+    term = applyWhileChanging(term, ::distribute)
 
-    if(newTerm is Conjunction) {
-        val cnf = toCNF(newTerm)
+    if(term is Conjunction) {
+        val cnf = toCNF(term)
         println("Convert to CNF.")
         println(cnf)
 
@@ -358,4 +407,8 @@ fun main(args: Array<String>) {
             null -> "unknown"
         })
     }
+
+    val zenTerm = Abstraction(a, Truth(true), a)
+    val application = Application(zenTerm, b)
+    println(reduceApplication(application))
 }
